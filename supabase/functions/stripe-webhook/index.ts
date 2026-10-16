@@ -41,11 +41,18 @@ Deno.serve(async (req) => {
       const s = event.data.object;
       const orderId = s?.metadata?.order_id;
       if (orderId) {
-        await c.from("orders")
-          .update({ status: "paid", paid_at: new Date().toISOString() })
-          .eq("id", orderId).eq("status", "pending");
-        await grantLicense(orderId);
-        await c.from("webhook_deliveries").update({ order_id: orderId }).eq("delivery_id", event.id);
+        const { data: order } = await c.from("orders")
+          .select("id,status").eq("id", orderId).maybeSingle();
+        if (!order) {
+          // Pedido ainda nao existe ou evento de teste — ok, sem retry.
+          await c.from("webhook_deliveries").update({ status: "ignored" }).eq("delivery_id", event.id);
+        } else if (order.status === "pending") {
+          await c.from("orders")
+            .update({ status: "paid", paid_at: new Date().toISOString() })
+            .eq("id", orderId).eq("status", "pending");
+          await grantLicense(orderId);
+          await c.from("webhook_deliveries").update({ order_id: orderId }).eq("delivery_id", event.id);
+        }
       }
     }
     return json({ ok: true });
