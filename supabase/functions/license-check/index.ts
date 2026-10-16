@@ -17,7 +17,7 @@ Deno.serve(async (req) => {
     // Load licenses joined with products
     const { data: lics } = await c
       .from("licenses")
-      .select("id, status, expires_at, activated_at, hwid, product_id, products(slug, name, dll_path)")
+      .select("id, status, expires_at, activated_at, hwid, product_id, products(slug, name, dll_path, pkg_path)")
       .eq("user_id", me.userId);
 
     const list = (lics || []).map((l: any) => {
@@ -27,6 +27,7 @@ Deno.serve(async (req) => {
         product: l.products?.name || "",
         slug: l.products?.slug || "",
         dll_path: l.products?.dll_path || "",
+        pkg_path: l.products?.pkg_path || l.products?.dll_path || "",
         status: expired ? "expired" : l.status,
         expires_at: l.expires_at,
         activated_at: l.activated_at,
@@ -67,7 +68,7 @@ Deno.serve(async (req) => {
         : list.find((l: any) => l.status === "active");
       if (!lic) return fail("Voce nao tem licenca ativa para este produto.", 403);
       const { data, error } = await c.storage
-        .from("downloads").createSignedUrl(lic.dll_path, 300);
+        .from("downloads").createSignedUrl(lic.pkg_path, 300);
       if (error || !data?.signedUrl) return fail("Arquivo indisponivel.", 404);
       return json({ ok: true, download_url: data.signedUrl, product: lic.product });
     }
