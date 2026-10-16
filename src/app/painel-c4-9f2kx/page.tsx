@@ -47,7 +47,7 @@ export default function AdminPage() {
   useEffect(() => {
     (async () => {
       const { data: sess } = await supabase.auth.getSession();
-      if (!sess.session) return router.push('/login?next=/admin');
+      if (!sess.session) return router.push('/login?next=/painel-c4-9f2kx');
       const { data: prof } = await supabase
         .from('profiles').select('is_admin').eq('id', sess.session.user.id).single();
       if (!prof?.is_admin) return setAllowed(false);

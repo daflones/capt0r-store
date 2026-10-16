@@ -24,7 +24,8 @@ Pagamentos: PIX via MercosulPay e cartão via Stripe Checkout.
 ## Rotas
 
 - `/` loja · `/login` `/cadastro` · `/checkout/[slug]` · `/conta` · `/sucesso`
-- `/admin` painel (funil, eventos, pedidos, usuários, produtos)
+- painel admin em rota secreta (veja `src/app/`), sem links públicos — o
+  robots.txt NÃO lista o caminho pra não vazar. proteção real = `is_admin`.
 
 ## API do injetor
 
