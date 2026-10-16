@@ -28,13 +28,16 @@ Deno.serve(async (req) => {
     if (eventType === "pix.received" && typeof reference === "string") {
       const { data: order } = await c.from("orders").select("*").eq("id", reference).maybeSingle();
       if (!order) return fail("Pedido nao encontrado.", 404);
+      if (order.status === "paid") return json({ ok: true, already: true });
+      if (!order.provider_id) return json({ ok: true, ignored: "sem charge no gateway" });
 
-      // Trust but verify: confirm with the gateway before granting.
-      if (order.provider_id) {
-        const ch = await getCharge(order.provider_id);
-        if (ch.status !== "completed" && ch.status !== "paid")
-          return json({ ok: true, ignored: ch.status });
-      }
+      // So libera se o GATEWAY confirmar — webhook forjado nao passa aqui.
+      const ch = await getCharge(order.provider_id);
+      if (ch.id !== order.provider_id || ch.reference !== order.id)
+        return json({ ok: true, ignored: "charge nao corresponde" });
+      if (ch.status !== "completed" && ch.status !== "paid")
+        return json({ ok: true, ignored: ch.status });
+
       await c.from("orders").update({ status: "paid", paid_at: new Date().toISOString() }).eq("id", order.id);
       await grantLicense(order.id);
       await c.from("webhook_deliveries").update({ order_id: order.id }).eq("delivery_id", deliveryId);

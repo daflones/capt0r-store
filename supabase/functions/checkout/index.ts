@@ -25,6 +25,11 @@ Deno.serve(async (req) => {
       .order("created_at", { ascending: false }).limit(1).maybeSingle();
 
     let order = open;
+    if (order && order.amount_cents !== product.price_cents) {
+      // Preco mudou depois que o pedido foi criado — atualiza.
+      await c.from("orders").update({ amount_cents: product.price_cents }).eq("id", order.id);
+      order.amount_cents = product.price_cents;
+    }
     if (!order) {
       const { data, error } = await c.from("orders").insert({
         user_id: me.userId,
