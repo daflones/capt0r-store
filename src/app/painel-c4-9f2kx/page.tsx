@@ -495,6 +495,29 @@ export default function AdminPage() {
                       → {l.products?.name}: <b>{l.status}</b>
                       {l.expires_at &&
                         ` até ${new Date(l.expires_at).toLocaleDateString("pt-BR")}`}
+                      {l.hwid && (
+                        <a
+                          href="#"
+                          style={{ marginLeft: 10, color: "var(--gold)" }}
+                          onClick={async (e) => {
+                            e.preventDefault();
+                            if (
+                              !window.confirm(
+                                "Liberar HWID? O cliente poderá ativar em outro PC.",
+                              )
+                            )
+                              return;
+                            await save(
+                              "licenses",
+                              l.id,
+                              { hwid: null },
+                              "HWID liberado.",
+                            );
+                          }}
+                        >
+                          resetar hwid
+                        </a>
+                      )}
                       {l.status === "active" && (
                         <a
                           href="#"

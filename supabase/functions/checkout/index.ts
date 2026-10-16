@@ -2,6 +2,15 @@
 // Auth: user JWT. Creates order; PIX -> MercosulPay QR, card -> Stripe Checkout.
 import { caller, fail, json, requireEnv, service } from "../_shared/common.ts";
 import { createPixCharge } from "../_shared/mercosulpay.ts";
+import QRCode from "npm:qrcode@1.5.4";
+
+async function qrPng(emv: string): Promise<string | null> {
+  try {
+    return await QRCode.toDataURL(emv, { width: 400, margin: 2 });
+  } catch {
+    return null;
+  }
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type" } });
@@ -49,10 +58,17 @@ Deno.serve(async (req) => {
           amount_cents: order.amount_cents,
           description: `${product.name} - C4pt0r Store`,
         });
+        const qrImg = charge.qrImage || (charge.qrCode ? await qrPng(charge.qrCode) : null);
         await c.from("orders").update({
-          provider_id: charge.id, qr_code: charge.qrCode, qr_image: charge.qrImage,
+          provider_id: charge.id, qr_code: charge.qrCode, qr_image: qrImg,
         }).eq("id", order.id);
         order.qr_code = charge.qrCode;
+        order.qr_image = qrImg;
+      }
+      if (!order.qr_image && order.qr_code) {
+        order.qr_image = await qrPng(order.qr_code);
+        if (order.qr_image)
+          await c.from("orders").update({ qr_image: order.qr_image }).eq("id", order.id);
       }
       return json({ ok: true, order_id: order.id, qr_code: order.qr_code, qr_image: order.qr_image || null });
     }
