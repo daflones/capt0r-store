@@ -1,0 +1,11 @@
+[functions.stripe-webhook]
+verify_jwt = false
+[functions.mercosul-webhook]
+verify_jwt = false
+# These handlers validate the user with auth.getUser(token), supporting signing-key changes.
+[functions.checkout]
+verify_jwt = false
+[functions.order-status]
+verify_jwt = false
+[functions.license-check]
+verify_jwt = false

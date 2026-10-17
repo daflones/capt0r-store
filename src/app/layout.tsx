@@ -1,4 +1,5 @@
 import "./globals.css";
+import "./premium.css";
 import type { Metadata } from "next";
 import { DISCORD_URL } from "@/lib/store";
 
@@ -32,6 +33,12 @@ export default function RootLayout({
           </a>
           <nav aria-label="Navegação principal">
             <a href="/#catalogo">Catálogo</a>
+            <a className="nav-optional" href="/#lancamentos">
+              Lançamentos
+            </a>
+            <a className="nav-optional" href="/#promocoes">
+              Ofertas
+            </a>
             <a href={DISCORD_URL} target="_blank" rel="noreferrer">
               Comunidade ↗
             </a>
@@ -53,6 +60,12 @@ export default function RootLayout({
           </div>
           <div className="footer-links">
             <a href="/#catalogo">Catálogo</a>
+            <a className="nav-optional" href="/#lancamentos">
+              Lançamentos
+            </a>
+            <a className="nav-optional" href="/#promocoes">
+              Ofertas
+            </a>
             <a href="/conta">Minha conta</a>
             <a href={DISCORD_URL} target="_blank" rel="noreferrer">
               Suporte ↗

@@ -1,51 +1,31 @@
-# C4PT0R — reformulação da loja FiveM / GTA 5
+# Relatório — Premium v2
 
-## Implementado
+## Estado consultado
 
-- Identidade carvão/verde neon, banner original, capa conceitual para licenças e animações leves.
-- Catálogo conectado aos produtos existentes, busca por nome/recurso, filtro por duração, ordenação e recursos expansíveis.
-- Estados de carregamento, vazio, erro e tentativa de recarregar; autenticação acompanha mudanças de sessão.
-- Discord centralizado em `src/lib/store.ts`: https://discord.gg/PhkbhxMBy (encontrado no layout original; convite não validado externamente).
-- Botão flutuante global, FAQ, etapas de compra, comunidade, foco de teclado e redução de movimento.
-- Admin com gráfico de receita confirmada em 14 dias (Brasília), ticket médio e distribuição de situações.
-- Busca e paginação local nas listas carregadas, validação de preço/duração e confirmação de ações de acesso/revogação.
-- Tratamento de falhas do Supabase; correção do cleanup do intervalo e de joins `profiles(email)` sem FK direta no schema versionado.
-- Situação financeira exibida como leitura: a edição direta anterior marcava pedidos como pagos sem executar o fluxo de licença.
-- Nenhuma avaliação fictícia, contagem de vendas inventada ou promessa de produto indetectável foi incluída.
+Repositório remoto: https://github.com/daflones/capt0r-store. Main consultada em 17/10/2026: `fb43264` (variantes, descontos e brindes). Branch de redesign anterior: `feat/fivem-store-redesign`. O pacote incorpora as funcionalidades relevantes da main consultada; não representa um merge Git já executado.
 
-## Limites dos indicadores
+Supabase: esquema até 0004, dois produtos, seis variantes, nove pedidos e uma licença no momento da leitura. As cinco Edge Functions estavam ativas. O `order-status` publicado ainda concedia duração pelo produto, ignorando variante e brinde; os outros fluxos tinham lógica divergente. A versão incluída centraliza concessão em uma transação PostgreSQL e preserva os termos do pedido.
 
-O backend original limita eventos a 500, pedidos a 200, perfis a 500 e licenças a 500. A interface agora identifica explicitamente essa amostra. Paginação e busca operam nesses registros carregados, não em todo o histórico. Gráficos não são relatórios contábeis. Uma próxima evolução deve agregar e paginar no servidor com autorização de administrador. Um pedido cujo perfil esteja fora da amostra pode não apresentar email.
+Nenhum registro pessoal, dump de banco ou segredo integra o ZIP. Nenhuma migração ou function desta versão foi publicada remotamente.
 
-## Auditoria: pendências do fluxo de pagamento
+## Entrega
 
-Estas pendências já existiam e não foram alteradas nesta reformulação visual:
+- Vitrine charcoal/lima com artes originais, hero alternável, catálogo pesquisável, categorias, lançamentos, ofertas reais, FAQ e Discord flutuante usando o convite encontrado no projeto: https://discord.gg/PhkbhxMBy.
+- Página dedicada a cada produto, seleção de plano, requisitos e compra; preços e brindes vêm das variantes existentes.
+- Biblioteca autenticada com validade, estado, instruções e acesso por produto; entrega no site, sem envio de produto por email. Confirmação de cadastro por email continua dependendo do Supabase Auth.
+- Painel com seis áreas, métricas agregadas no banco, gráficos por período, ranking, paginação de pedidos/usuários/licenças/eventos, busca, filtros, administração de HWID e editor de produtos, artes, planos, descontos e brindes.
+- Planos por minutos, incluindo 1h, 24h, 7 dias, 30 dias, 365 dias e vitalício. Períodos são durações fixas, não meses/anos de calendário.
+- PIX com QR; Stripe com validação de estado pago, identidade, valor e moeda. Sucesso só é mostrado após confirmação de licença. Reentregas não duplicam licença nem prorrogam sua validade.
+- Migração compatível com `product_variants`, políticas de acesso, bucket de artes e função administrativa protegida.
 
-1. `stripe-webhook` deve validar `payment_status`, valor, moeda e vínculo ao pedido antes de liberar a licença.
-2. A deduplicação registra a entrega antes do processamento; uma falha posterior pode impedir a recuperação no retry. Usar processamento transacional/idempotente e erros verificados.
-3. `checkout` altera o valor de pedido pendente sem recriar uma cobrança PIX existente. Evitar reutilizar QR de preço antigo.
-4. Conferir eventos de estorno/reembolso e sua relação com licenças.
-5. Rotacionar credenciais secretas compartilhadas na conversa; jamais inseri-las no frontend ou no Git. Apenas URL e chave pública Supabase são variáveis `NEXT_PUBLIC_*`.
+## Validação
 
-## Validação e publicação
+Build de produção Next.js e checagem de tipos passaram. Seis testes unitários passaram, cobrindo promoções, validade/revogação, normalização de planos, redirecionamentos e validações Stripe. Teste PostgreSQL local com PGlite executou migrações 0001–0005 e confirmou snapshots, brinde, repetição idempotente, vitalício, rejeição de pedido reembolsado, proteção administrativa e visibilidade de produto inativo para comprador.
 
-- TypeScript (`npx tsc --noEmit`) passou.
-- Build Next.js passou com valores públicos fictícios de configuração (não valida acesso ao banco).
-- Artes inspecionadas e convertidas para WebP; nenhuma dependência adicionada.
-- Fluxos reais de autenticação, checkout, webhook e permissões no banco precisam ser validados em homologação.
-- Inspeção visual em navegador não disponível nesta sessão. O site público também não abriu na ferramenta de consulta.
-- Sem migrações necessárias para estas alterações. Manter variáveis públicas existentes no build do EasyPanel; publicar após revisão da branch.
-- Não houve alteração de secrets, migrações remotas ou cobrança de cartão.
+Para repetir os testes unitários use Node 24: `node --experimental-strip-types --test tests/store-v2.test.mjs`. Para o contrato SQL instale temporariamente `npm install --no-save --package-lock=false @electric-sql/pglite` e rode `node tests/database-contract.mjs`. PGlite usa stubs de auth/storage; não substitui integração Supabase.
 
-## Artes originais
+Não foi realizada validação visual em navegador, compra real ou teste ponta a ponta com gateways. A checagem Deno não concluiu: o ambiente recusou a conexão ao registry.npmjs.org para baixar dependências externas. Antes de publicar, execute os testes de implantação descritos em DEPLOY_V2.md.
 
-Geradas com a ferramenta integrada de imagens e incluídas no repositório:
+## Limitações operacionais
 
-- `public/images/hero.webp`: cenário urbano noturno inspirado em Los Angeles, esportivo preto à direita, reflexos em asfalto molhado, palmeiras, névoa e luz verde-lima, espaço escuro à esquerda para título, sem texto/logos/pessoas.
-- `public/images/product.webp`: mockup conceitual de caixa de licença digital C4PT0R, monograma C4, acabamento preto fosco, bordas verde-lima, concreto molhado e esportivo/cidade desfocados. Não representa captura real do software.
-
-A capa é compartilhada pela coleção; não há fotos de clientes fictícios. Os textos de produto e preços continuam vindo do Supabase.
-
-## Atualização final do ZIP
-
-Após a primeira versão enviada à branch, o pacote recebeu um layout administrativo dedicado: sidebar desktop, navegação horizontal mobile, cabeçalho por seção e tratamento visual próprio para KPIs. A captura enviada pelo proprietário mostrava o painel antigo. Estas alterações finais e o prompt do Devin estão apenas no ZIP; não houve novo commit/push após a instrução de entregar o pacote.
+Reembolsos/chargebacks ainda exigem reconciliação e revogação administrativa; não há automação completa desse ciclo. Valores retroativos são fotografados pela migração conforme o catálogo atual: alterações históricas já feitas não podem ser reconstruídas. Licenças existentes não têm a validade reescrita. Downloads continuam dependendo dos caminhos/serviço de entrega já configurados. O catálogo não gera promoções ou avaliações fictícias. O convite Discord foi preservado, mas sua validade externa não foi confirmada.

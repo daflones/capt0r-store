@@ -1,28 +1,18 @@
-# C4PT0R Store — pacote de continuação visual
+# C4PT0R Store Premium v2
 
-Este é o projeto completo da loja FiveM / GTA 5 com o redesign da vitrine, imagens originais e melhorias administrativas.
+Projeto completo para revisão e implantação pelo Devin. Abra `docs/PROMPT_DEVIN_C4PT0R.md` para continuar.
 
-**Para continuar com Devin:** envie este ZIP e cole/anexe `docs/PROMPT_DEVIN_C4PT0R.md`.
+Inclui nova vitrine, imagens WebP, páginas de produto, lançamentos, promoções reais, biblioteca de compras e painel administrativo com navegação lateral, indicadores, gráficos, filtros, planos, brindes e configuração de entrega.
 
-O ZIP inclui refinamentos do menu lateral administrativo feitos após o envio inicial à branch `feat/fivem-store-redesign`. Estas alterações finais não foram commitadas/enviadas. A main e o site publicado não foram alterados por esta tarefa.
+## Rodar
 
-## Rodar localmente
+1. Use Node 22 ou superior e execute `npm ci`.
+2. Copie `.env.example` para `.env.local` e configure as duas variáveis públicas do frontend.
+3. Execute `npm run dev`. Build: `npm run build`.
+4. Antes de publicar, siga `docs/DEPLOY_V2.md`: esta versão depende da migração 0005 e das cinco Edge Functions do pacote.
 
-1. Instale Node.js compatível com o projeto (Docker usa Node 22).
-2. Execute `npm ci`.
-3. Copie `.env.example` para `.env.local` e configure somente as variáveis públicas do frontend. Segredos de Edge Functions pertencem ao ambiente seguro do Supabase, nunca ao navegador.
-4. Execute `npm run dev` e abra `http://localhost:3000`.
-5. Para verificar: `npx tsc --noEmit` e `npm run build`.
+O banco e as functions em produção foram consultados. As novas mudanças NÃO foram aplicadas em produção e não houve novo commit ou push nesta continuação.
 
-As chaves secretas compartilhadas anteriormente não estão incluídas. Rotacione-as antes de reutilizar as integrações.
+Credenciais secretas não acompanham o pacote. Rotacione as credenciais privadas compartilhadas na conversa e configure substitutas somente nos ambientes apropriados.
 
-## Conteúdo
-
-- `src/`: aplicação, catálogo e administrador.
-- `public/images/`: banner e capa de produto em WebP.
-- `supabase/`: schema e funções existentes, preservados.
-- `Dockerfile`: implantação existente no EasyPanel.
-- `docs/REDESIGN.md`: alterações, validações e pendências encontradas.
-- `docs/PROMPT_DEVIN_C4PT0R.md`: instruções detalhadas de continuação.
-
-O pacote não inclui dependências, build, histórico Git ou credenciais reais. Preços/produtos continuam vindo do Supabase. Gráficos indicam a amostra carregada; não há avaliações fictícias.
+Veja `docs/REDESIGN.md` para evidências, testes e limitações. Não existem avaliações falsas ou números de vendas inventados.

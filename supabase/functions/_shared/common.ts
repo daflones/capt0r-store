@@ -3,7 +3,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 export const cors = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
@@ -29,7 +30,7 @@ export function service() {
   return createClient(
     requireEnv("SUPABASE_URL"),
     requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
-    { auth: { persistSession: false } }
+    { auth: { persistSession: false } },
   );
 }
 
@@ -38,9 +39,13 @@ export async function caller(req: Request) {
   const auth = req.headers.get("Authorization") || "";
   const token = auth.replace(/^Bearer\s+/i, "");
   if (!token) return null;
-  const c = createClient(requireEnv("SUPABASE_URL"), requireEnv("SUPABASE_ANON_KEY"), {
-    auth: { persistSession: false },
-  });
+  const c = createClient(
+    requireEnv("SUPABASE_URL"),
+    requireEnv("SUPABASE_ANON_KEY"),
+    {
+      auth: { persistSession: false },
+    },
+  );
   const { data, error } = await c.auth.getUser(token);
   if (error || !data.user) return null;
   return { userId: data.user.id, email: data.user.email || "" };

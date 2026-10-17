@@ -3,7 +3,12 @@ import { requireEnv } from "./common.ts";
 
 const BASE = "https://mercosulpay.com/api/public/v1";
 
-async function call(path: string, method = "GET", body?: unknown, idemKey?: string) {
+async function call(
+  path: string,
+  method = "GET",
+  body?: unknown,
+  idemKey?: string,
+) {
   const res = await fetch(BASE + path, {
     method,
     headers: {
@@ -16,7 +21,8 @@ async function call(path: string, method = "GET", body?: unknown, idemKey?: stri
   });
   const data = await res.json().catch(() => null);
   if (!res.ok) {
-    const msg = data?.message || data?.error || `MercosulPay HTTP ${res.status}`;
+    const msg =
+      data?.message || data?.error || `MercosulPay HTTP ${res.status}`;
     throw new Error(msg);
   }
   return data?.data || data;
@@ -37,13 +43,15 @@ export async function createPixCharge(order: {
       description: order.description,
       reference_id: order.id,
     },
-    order.id // idempotency: same order => same charge
+    order.id, // idempotency: same order => same charge
   );
-  if (!raw || typeof raw.id !== "string") throw new Error("Resposta sem id da cobranca.");
+  if (!raw || typeof raw.id !== "string")
+    throw new Error("Resposta sem id da cobranca.");
   return {
     id: raw.id as string,
     qrCode: (raw.qrCode || raw.qr_code || raw.emv || "") as string,
-    qrImage: (raw.qrImage || raw.qr_image || raw.qrCodeImage || null) as string | null,
+    qrImage: (raw.qrImage || raw.qr_image || raw.qrCodeImage || null) as
+      string | null,
     status: (raw.status || "pending") as string,
   };
 }

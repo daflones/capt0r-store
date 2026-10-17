@@ -1,205 +1,265 @@
-'use client';
-
-import { useEffect, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
-import { supabase, Product, Variant, brl, variantPrice, variantDuration } from '@/lib/supabase';
-import { track } from '@/lib/track';
-
-type PixData = { order_id: string; qr_code: string; qr_image: string | null };
-
-export default function CheckoutPage() {
-  const { slug } = useParams<{ slug: string }>();
-  const router = useRouter();
-  const [product, setProduct] = useState<Product | null>(null);
-  const [variant, setVariant] = useState<Variant | null>(null);
-  const [method, setMethod] = useState<'pix' | 'card'>('pix');
-  const [pix, setPix] = useState<PixData | null>(null);
-  const [status, setStatus] = useState('');
-  const [err, setErr] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const variants = (product?.product_variants || [])
-    .filter((v) => v.active)
-    .sort((a, b) => a.sort - b.sort || a.price_cents - b.price_cents);
-
+"use client";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { supabase } from "@/lib/supabase";
+import { CatalogProduct, activePlans, durationLabel, planPrice } from "@/lib/catalog";
+import { callFunction } from "@/lib/api";
+import { Artwork, Price } from "@/components/CatalogUI";
+import { DISCORD_URL } from "@/lib/store";
+type Pix = { order_id: string; qr_code: string; qr_image: string | null };
+function Checkout() {
+  const { slug } = useParams<{ slug: string }>(),
+    params = useSearchParams(),
+    router = useRouter();
+  const [product, setProduct] = useState<CatalogProduct | null>(null),
+    [selected, setSelected] = useState(params.get("plan") || ""),
+    [method, setMethod] = useState<"pix" | "card">("pix"),
+    [pix, setPix] = useState<Pix | null>(null),
+    [error, setError] = useState(""),
+    [busy, setBusy] = useState(false),
+    [message, setMessage] = useState(""),
+    [checking, setChecking] = useState(false);
   useEffect(() => {
     (async () => {
-      const { data: sess } = await supabase.auth.getSession();
-      if (!sess.session) return router.push(`/login?next=/checkout/${slug}`);
-      const { data } = await supabase
-        .from('products')
-        .select('*, product_variants(*)')
-        .eq('slug', slug)
-        .single();
-      if (data) {
-        const p = data as Product;
-        setProduct(p);
-        const act = (p.product_variants || [])
-          .filter((v) => v.active)
-          .sort((a, b) => a.sort - b.sort || a.price_cents - b.price_cents);
-        if (act.length) setVariant(act[0]);
-        track('checkout_started', { product_id: p.id });
-      }
-    })();
-  }, [slug, router]);
-
-  async function callFn(name: string, body: unknown) {
-    const { data: sess } = await supabase.auth.getSession();
-    const res = await fetch(
-      `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/${name}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${sess.session?.access_token}`,
-          apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-        },
-        body: JSON.stringify(body),
-      }
-    );
-    const json = await res.json();
-    if (!res.ok || !json.ok) throw new Error(json.error || 'Erro no servidor.');
-    return json;
-  }
-
-  async function pay() {
-    setBusy(true);
-    setErr('');
-    track('payment_started', { product_id: product?.id, meta: { method, variant: variant?.id } });
-    try {
-      const r = await callFn('checkout', {
-        product_slug: slug,
-        method,
-        variant_id: variant?.id || null,
-      });
-      if (method === 'card' && r.checkout_url) {
-        window.location.href = r.checkout_url;
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) {
+        router.replace(
+          `/login?next=${encodeURIComponent(`/checkout/${slug}?plan=${params.get("plan") || ""}`)}`,
+        );
         return;
       }
-      if (method === 'pix' && r.qr_code) {
-        setPix({ order_id: r.order_id, qr_code: r.qr_code, qr_image: r.qr_image || null });
-        pollStatus(r.order_id);
+      const { data, error } = await supabase
+        .from("products")
+        .select("*,product_variants!product_variants_product_id_fkey(*)")
+        .eq("slug", slug)
+        .eq("active", true)
+        .single();
+      if (error) throw error;
+      setProduct(data);
+      setSelected((p) =>
+        activePlans(data).some((v) => v.id === p)
+          ? p
+          : activePlans(data)[0]?.id || "",
+      );
+    })().catch(() =>
+      setError(
+        "Não foi possível abrir este produto. Volte ao catálogo e tente novamente.",
+      ),
+    );
+  }, [slug, params, router]);
+  const check = useCallback(async () => {
+    if (!pix) return;
+    setChecking(true);
+    try {
+      const r = await callFunction("order-status", { order_id: pix.order_id });
+      if (r.status === "paid" && r.license_ready) {
+        router.replace(`/sucesso?order=${pix.order_id}`);
+        return;
       }
-    } catch (e: any) {
-      setErr(e.message);
+      setMessage(
+        r.status === "pending"
+          ? "Aguardando confirmação do pagamento."
+          : r.status === "paid"
+            ? "Pagamento confirmado. Preparando seu acesso…"
+            : `Situação do pedido: ${r.status}. Consulte o suporte se já pagou.`,
+      );
+    } catch (e) {
+      setMessage((e as Error).message);
+    } finally {
+      setChecking(false);
     }
-    setBusy(false);
-  }
-
-  async function pollStatus(orderId: string) {
-    setStatus('Aguardando pagamento...');
-    for (let i = 0; i < 120; i++) {
-      await new Promise((r) => setTimeout(r, 5000));
-      try {
-        const r = await callFn('order-status', { order_id: orderId });
-        if (r.status === 'paid') {
-          setStatus('Pago! Acesso liberado.');
-          track('purchase_completed', { product_id: product?.id });
-          setTimeout(() => router.push('/conta'), 1500);
-          return;
-        }
-        if (r.status === 'failed' || r.status === 'expired') {
-          setStatus('Pagamento expirado/falhou. Gere outro.');
-          return;
-        }
-      } catch {}
+  }, [pix, router]);
+  useEffect(() => {
+    if (!pix) return;
+    const timer = setInterval(check, 7000);
+    return () => clearInterval(timer);
+  }, [pix, check]);
+  const plan = product
+    ? activePlans(product).find((p) => p.id === selected)
+    : undefined;
+  async function pay() {
+    if (!product || !plan) return;
+    setBusy(true);
+    setError("");
+    try {
+      const r = await callFunction("checkout", {
+        product_slug: slug,
+        variant_id: plan.id,
+        expected_amount_cents: planPrice(plan),
+        method,
+      });
+      if (method === "card") {
+        window.location.assign(r.checkout_url);
+      } else {
+        setPix(r);
+        setMessage("Aguardando confirmação do pagamento.");
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
     }
   }
-
-  if (!product) return <div className="spin">Carregando...</div>;
-
-  const finalPrice = variant ? variantPrice(variant) : product.price_cents;
-  const planName = variant ? `${product.name} — ${variant.label}` : product.name;
-  const planDur = variant
-    ? variantDuration(variant)
-    : product.duration_days
-      ? `${product.duration_days} dias`
-      : 'vitalício';
-
+  if (!product)
+    return <div className="empty-state">{error || "Preparando checkout…"}</div>;
   return (
-    <div className="panel" style={{ maxWidth: 520 }}>
-      <h1>Checkout</h1>
-      <p className="sub">
-        {planName} — <b style={{ color: 'var(--gold)' }}>{brl(finalPrice)}</b>
-        {` (${planDur})`}
-      </p>
-
-      {err && <div className="msg err">{err}</div>}
-      {status && <div className="msg info">{status}</div>}
-
-      {!pix && variants.length > 0 && (
-        <div className="variant-list">
-          {variants.map((v) => {
-            const sel = variant?.id === v.id;
-            const finalV = variantPrice(v);
-            return (
-              <button
-                key={v.id}
-                type="button"
-                className={`variant-card ${sel ? 'sel' : ''}`}
-                onClick={() => setVariant(v)}
-              >
-                <span className="variant-radio" aria-hidden="true">
-                  {sel ? '◉' : '○'}
-                </span>
-                <span className="variant-info">
-                  <b>{v.label}</b>
-                  {v.bonus_label && (
-                    <em className="variant-bonus">🎁 {v.bonus_label}</em>
-                  )}
-                </span>
-                <span className="variant-price">
-                  {v.discount_cents > 0 && (
-                    <s>{brl(v.price_cents)}</s>
-                  )}
-                  <b>{brl(finalV)}</b>
-                </span>
-              </button>
-            );
-          })}
+    <>
+      <nav className="breadcrumbs">
+        <a href={`/produto/${slug}`}>{product.name}</a>
+        <span>/</span>Finalizar compra
+      </nav>
+      <div className="checkout-heading">
+        <span className="eyebrow">C4PT0R CHECKOUT</span>
+        <h1>
+          Seu próximo acesso.
+          <br />
+          <em>A poucos passos.</em>
+        </h1>
+        <div className="checkout-steps">
+          <span className="done">01 · Conta</span>
+          <span className="active">02 · Pagamento</span>
+          <span>03 · Biblioteca</span>
         </div>
-      )}
-
-      {!pix ? (
-        <>
-          <div className="methods">
-            <button className={method === 'pix' ? 'sel' : ''} onClick={() => setMethod('pix')}>
-              PIX
-            </button>
-            <button className={method === 'card' ? 'sel' : ''} onClick={() => setMethod('card')}>
-              CARTÃO
-            </button>
-          </div>
-          <button className="btn" onClick={pay} disabled={busy}>
-            {busy ? 'GERANDO...' : method === 'pix' ? `GERAR QR — ${brl(finalPrice)}` : `PAGAR — ${brl(finalPrice)}`}
-          </button>
-        </>
-      ) : (
-        <div className="qrbox">
-          {pix.qr_image ? (
-            <img src={pix.qr_image} alt="QR Code PIX" />
-          ) : (
-            <img
-              src={`https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(pix.qr_code)}`}
-              alt="QR Code PIX"
-            />
+      </div>
+      <div className="checkout-layout">
+        <section className="checkout-payment">
+          <h2>Como você prefere pagar?</h2>
+          <p>Seu produto será liberado na biblioteca desta conta.</p>
+          {error && (
+            <div className="msg err" role="alert">
+              {error}
+            </div>
           )}
-          <div className="copia">
-            <input readOnly value={pix.qr_code} onFocus={(e) => e.target.select()} />
-            <button
-              className="btn ghost"
-              onClick={() => navigator.clipboard.writeText(pix.qr_code)}
-            >
-              COPIAR
-            </button>
+          {message && (
+            <div className="msg info" role="status">
+              {message}
+            </div>
+          )}
+          {!pix ? (
+            <>
+              <label className="field">
+                Plano
+                <select
+                  value={selected}
+                  onChange={(e) => setSelected(e.target.value)}
+                >
+                  {activePlans(product).map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} · {durationLabel(p)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="payment-choices">
+                <button
+                  className={method === "pix" ? "selected" : ""}
+                  onClick={() => setMethod("pix")}
+                >
+                  <span>◈</span>
+                  <strong>PIX</strong>
+                  <small>QR Code ou copia e cola</small>
+                </button>
+                <button
+                  className={method === "card" ? "selected" : ""}
+                  onClick={() => setMethod("card")}
+                >
+                  <span>▤</span>
+                  <strong>Cartão</strong>
+                  <small>Checkout da Stripe</small>
+                </button>
+              </div>
+              <button
+                className="btn buy-btn"
+                disabled={busy || !plan}
+                onClick={pay}
+              >
+                {busy
+                  ? "PREPARANDO…"
+                  : method === "pix"
+                    ? "GERAR PAGAMENTO PIX ↗"
+                    : "CONTINUAR COM CARTÃO ↗"}
+              </button>
+            </>
+          ) : (
+            <div className="qrbox">
+              {pix.qr_image ? (
+                <img src={pix.qr_image} alt="QR Code PIX" />
+              ) : (
+                <p>Use o código copia e cola abaixo.</p>
+              )}
+              <div className="copia">
+                <input
+                  aria-label="Código PIX"
+                  readOnly
+                  value={pix.qr_code}
+                  onFocus={(e) => e.target.select()}
+                />
+                <button
+                  className="btn ghost"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(pix.qr_code);
+                      setMessage(
+                        "Código copiado. Cole no aplicativo do seu banco.",
+                      );
+                    } catch {
+                      setMessage("Selecione o código e copie manualmente.");
+                    }
+                  }}
+                >
+                  COPIAR
+                </button>
+              </div>
+              <button className="btn ghost" onClick={check} disabled={checking}>
+                {checking ? "VERIFICANDO…" : "JÁ PAGUEI · VERIFICAR"}
+              </button>
+              <p>Você pode acompanhar o pedido também na sua conta.</p>
+            </div>
+          )}
+          <div className="checkout-help">
+            <span>Precisa de ajuda?</span>
+            <a href={DISCORD_URL} target="_blank" rel="noreferrer">
+              Falar com suporte ↗
+            </a>
           </div>
-          <p style={{ marginTop: 14, color: 'var(--dim)', fontSize: 13 }}>
-            Escaneie com o app do banco ou use o código copia-e-cola.
-            <br />
-            A liberação é automática — a página atualiza sozinha.
-          </p>
-        </div>
-      )}
-    </div>
+        </section>
+        <aside className="order-summary">
+          <Artwork src={product.image_url} alt={product.name} />
+          <div>
+            <span className="eyebrow">RESUMO DO PEDIDO</span>
+            <h2>{product.name}</h2>
+            {plan && (
+              <>
+                <div className="summary-row">
+                  <span>Plano</span>
+                  <b>{plan.name}</b>
+                </div>
+                <div className="summary-row">
+                  <span>Acesso</span>
+                  <b>{durationLabel(plan)}</b>
+                </div>
+                <Price plan={plan} />
+                {plan.bonus_label && (
+                  <p className="bonus-callout">✦ {plan.bonus_label}</p>
+                )}
+              </>
+            )}
+            <p>
+              Pagamento único. Prazo contado a partir da confirmação. Produto
+              disponível na sua conta, sem entrega por e-mail.
+            </p>
+          </div>
+        </aside>
+      </div>
+    </>
+  );
+}
+export default function CheckoutPage() {
+  return (
+    <Suspense fallback={<div className="spin">Preparando…</div>}>
+      <Checkout />
+    </Suspense>
   );
 }

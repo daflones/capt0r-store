@@ -1,111 +1,149 @@
-// POST /checkout  { product_slug, method: 'pix'|'card', variant_id? }
-// Auth: user JWT. Creates order; PIX -> MercosulPay QR, card -> Stripe Checkout.
-import { caller, fail, json, requireEnv, service } from "../_shared/common.ts";
-import { createPixCharge } from "../_shared/mercosulpay.ts";
+import {
+  caller,
+  cors,
+  fail,
+  json,
+  requireEnv,
+  service,
+} from "../_shared/common.ts";
 import QRCode from "npm:qrcode@1.5.4";
-
-async function qrPng(emv: string): Promise<string | null> {
-  try {
-    return await QRCode.toDataURL(emv, { width: 400, margin: 2 });
-  } catch {
-    return null;
-  }
-}
-
+import { createPixCharge } from "../_shared/mercosulpay.ts";
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type" } });
+  if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
+  if (req.method !== "POST") return fail("Use POST.", 405);
   try {
     const me = await caller(req);
-    if (!me) return fail("Faca login para comprar.", 401);
-
-    const { product_slug, method, variant_id } = await req.json();
-    if (!product_slug || !["pix", "card"].includes(method))
-      return fail("Parametros invalidos.");
-
+    if (!me) return fail("Faça login para comprar.", 401);
+    const { product_slug, variant_id: plan_id, method, expected_amount_cents } = await req.json();
+    if (!product_slug || !plan_id || !["pix", "card"].includes(method))
+      return fail("Escolha um produto, plano e pagamento.");
     const c = service();
-    const { data: product } = await c
-      .from("products").select("*").eq("slug", product_slug).eq("active", true).single();
-    if (!product) return fail("Produto indisponivel.", 404);
-
-    // Variante (plano) opcional — preco/desconto/duracao definidos no servidor
-    let variant: any = null;
-    let amount = product.price_cents as number;
-    let itemName = product.name as string;
-    if (variant_id) {
-      const { data: v } = await c.from("product_variants").select("*")
-        .eq("id", variant_id).eq("product_id", product.id)
-        .eq("active", true).single();
-      if (!v) return fail("Plano indisponivel.", 404);
-      variant = v;
-      amount = Math.max(1, v.price_cents - (v.discount_cents || 0));
-      itemName = `${product.name} — ${v.label}`;
-    }
-
-    // Reuse an open pending order (same user+product+method); repurpose to the
-    // chosen variant (o indice unico impede 2 pendentes do mesmo produto).
-    const { data: open } = await c.from("orders").select("*")
-      .eq("user_id", me.userId).eq("product_id", product.id)
-      .eq("method", method).eq("status", "pending")
-      .order("created_at", { ascending: false }).limit(1).maybeSingle();
-
-    let order = open;
-    if (order && (order.amount_cents !== amount || order.variant_id !== (variant?.id || null))) {
-      await c.from("orders").update({
-        amount_cents: amount,
-        variant_id: variant?.id || null,
-        qr_code: null, qr_image: null, provider_id: null,  // nova cobranca pro novo valor
-      }).eq("id", order.id);
-      order.amount_cents = amount;
-      order.variant_id = variant?.id || null;
-      order.qr_code = null; order.qr_image = null; order.provider_id = null;
+    const { data: product, error: pe } = await c
+      .from("products")
+      .select("*")
+      .eq("slug", product_slug)
+      .eq("active", true)
+      .single();
+    if (pe || !product) return fail("Produto indisponível.", 404);
+    const { data: plan, error: ve } = await c
+      .from("product_variants")
+      .select("*")
+      .eq("id", plan_id)
+      .eq("product_id", product.id)
+      .eq("active", true)
+      .single();
+    if (ve || !plan) return fail("Plano indisponível.", 404);
+    const sale =
+      plan.discount_cents > 0 &&
+      (!plan.sale_ends_at || Date.parse(plan.sale_ends_at) > Date.now());
+    const amount = sale
+      ? plan.price_cents - plan.discount_cents
+      : plan.price_cents;
+    if (expected_amount_cents !== undefined && expected_amount_cents !== amount) return fail('O preço deste plano mudou. Atualize a página antes de continuar.', 409);
+    const pending = () =>
+      c
+        .from("orders")
+        .select("*")
+        .eq("user_id", me.userId)
+        .eq("product_id", product.id)
+        .eq("variant_id", plan.id)
+        .eq("method", method)
+        .eq("status", "pending")
+        .maybeSingle();
+    const open = await pending();
+    if (open.error) throw open.error;
+    let order = open.data;
+    // Never change purchase terms or a charge's value after order creation.
+    if (
+      order &&
+      (order.amount_cents !== amount ||
+        order.duration_minutes_snapshot !== plan.duration_minutes ||
+        order.bonus_product_id_snapshot !== plan.bonus_product_id ||
+        order.bonus_minutes_snapshot !==
+          (plan.bonus_minutes ?? plan.duration_minutes) ||
+        Date.parse(order.created_at) < Date.now() - 23 * 3600000)
+    ) {
+      const { error } = await c
+        .from("orders")
+        .update({ status: "expired" })
+        .eq("id", order.id)
+        .eq("status", "pending");
+      if (error) throw error;
+      order = null;
     }
     if (!order) {
-      const { data, error } = await c.from("orders").insert({
-        user_id: me.userId,
-        product_id: product.id,
-        variant_id: variant?.id || null,
-        method,
-        amount_cents: amount,
-      }).select().single();
-      if (error) return fail(error.message, 500);
-      order = data;
+      const created = await c
+        .from("orders")
+        .insert({
+          user_id: me.userId,
+          product_id: product.id,
+          variant_id: plan.id,
+          method,
+          amount_cents: amount,
+          product_name: product.name,
+          plan_name: plan.label,
+          duration_minutes_snapshot: plan.duration_minutes,
+          bonus_product_id_snapshot: plan.bonus_product_id,
+          bonus_minutes_snapshot: plan.bonus_minutes ?? plan.duration_minutes,
+          terms_snapshot: true,
+        })
+        .select()
+        .single();
+      if (created.error?.code === "23505") {
+        const retry = await pending();
+        if (retry.error) throw retry.error;
+        order = retry.data;
+      } else if (created.error) throw created.error;
+      else order = created.data;
     }
-
-    // ---- PIX via MercosulPay -------------------------------------------------
+    if (!order) throw new Error("Não foi possível criar o pedido.");
     if (method === "pix") {
       if (!order.qr_code) {
         const charge = await createPixCharge({
           id: order.id,
           amount_cents: order.amount_cents,
-          description: `${itemName} - C4pt0r Store`,
+          description: `${order.product_name} · ${order.plan_name}`,
         });
-        const qrImg = charge.qrImage || (charge.qrCode ? await qrPng(charge.qrCode) : null);
-        await c.from("orders").update({
-          provider_id: charge.id, qr_code: charge.qrCode, qr_image: qrImg,
-        }).eq("id", order.id);
-        order.qr_code = charge.qrCode;
-        order.qr_image = qrImg;
+        if (!charge.qrCode)
+          throw new Error("O provedor não retornou o código PIX.");
+        const patch = {
+          provider_id: charge.id,
+          qr_code: charge.qrCode,
+          qr_image:
+            charge.qrImage ||
+            (await QRCode.toDataURL(charge.qrCode, { width: 400, margin: 2 })),
+        };
+        const { error } = await c
+          .from("orders")
+          .update(patch)
+          .eq("id", order.id);
+        if (error) throw error;
+        Object.assign(order, patch);
       }
-      if (!order.qr_image && order.qr_code) {
-        order.qr_image = await qrPng(order.qr_code);
-        if (order.qr_image)
-          await c.from("orders").update({ qr_image: order.qr_image }).eq("id", order.id);
-      }
-      return json({ ok: true, order_id: order.id, qr_code: order.qr_code, qr_image: order.qr_image || null, amount_cents: order.amount_cents });
+      return json({
+        ok: true,
+        order_id: order.id,
+        qr_code: order.qr_code,
+        qr_image: order.qr_image,
+      });
     }
-
-    // ---- Card via Stripe Checkout -------------------------------------------
-    const site = Deno.env.get("SITE_URL") || "https://localhost:3000";
+    if (order.checkout_url)
+      return json({
+        ok: true,
+        order_id: order.id,
+        checkout_url: order.checkout_url,
+      });
+    const site = requireEnv("SITE_URL").replace(/\/$/, "");
     const params = new URLSearchParams({
       mode: "payment",
-      success_url: `${site}/sucesso`,
-      cancel_url: `${site}/checkout/${product.slug}`,
+      success_url: `${site}/sucesso?order=${order.id}`,
+      cancel_url: `${site}/checkout/${product.slug}?plan=${plan.id}`,
+      "payment_method_types[0]": "card",
       "line_items[0][quantity]": "1",
       "line_items[0][price_data][currency]": "brl",
       "line_items[0][price_data][unit_amount]": String(order.amount_cents),
-      "line_items[0][price_data][product_data][name]": itemName,
+      "line_items[0][price_data][product_data][name]": `${order.product_name} · ${order.plan_name}`,
       "metadata[order_id]": order.id,
-      "metadata[product_id]": product.id,
       "metadata[user_id]": me.userId,
       customer_email: me.email,
     });
@@ -114,16 +152,25 @@ Deno.serve(async (req) => {
       headers: {
         Authorization: `Bearer ${requireEnv("STRIPE_SECRET_KEY")}`,
         "Content-Type": "application/x-www-form-urlencoded",
+        "Idempotency-Key": `checkout-${order.id}`,
       },
       body: params.toString(),
       signal: AbortSignal.timeout(20000),
     });
-    const sess = await res.json();
-    if (!res.ok) return fail(sess?.error?.message || "Stripe error", 502);
-
-    await c.from("orders").update({ provider_id: sess.id }).eq("id", order.id);
-    return json({ ok: true, order_id: order.id, checkout_url: sess.url });
+    const session = await res.json();
+    if (!res.ok || !session.url)
+      throw new Error("Não foi possível abrir o pagamento com cartão.");
+    const { error } = await c
+      .from("orders")
+      .update({ provider_id: session.id, checkout_url: session.url })
+      .eq("id", order.id);
+    if (error) throw error;
+    return json({ ok: true, order_id: order.id, checkout_url: session.url });
   } catch (e) {
-    return fail((e as Error).message, 500);
+    console.error("checkout", e);
+    return fail(
+      "Não foi possível preparar o pagamento. Tente novamente ou fale com o suporte.",
+      500,
+    );
   }
 });
