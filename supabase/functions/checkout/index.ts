@@ -1,4 +1,4 @@
-// POST /checkout  { product_slug, method: 'pix'|'card' }
+// POST /checkout  { product_slug, method: 'pix'|'card', variant_id? }
 // Auth: user JWT. Creates order; PIX -> MercosulPay QR, card -> Stripe Checkout.
 import { caller, fail, json, requireEnv, service } from "../_shared/common.ts";
 import { createPixCharge } from "../_shared/mercosulpay.ts";
@@ -18,7 +18,7 @@ Deno.serve(async (req) => {
     const me = await caller(req);
     if (!me) return fail("Faca login para comprar.", 401);
 
-    const { product_slug, method } = await req.json();
+    const { product_slug, method, variant_id } = await req.json();
     if (!product_slug || !["pix", "card"].includes(method))
       return fail("Parametros invalidos.");
 
@@ -27,24 +27,45 @@ Deno.serve(async (req) => {
       .from("products").select("*").eq("slug", product_slug).eq("active", true).single();
     if (!product) return fail("Produto indisponivel.", 404);
 
-    // Reuse an open pending order (same user+product+method) to avoid spam.
+    // Variante (plano) opcional — preco/desconto/duracao definidos no servidor
+    let variant: any = null;
+    let amount = product.price_cents as number;
+    let itemName = product.name as string;
+    if (variant_id) {
+      const { data: v } = await c.from("product_variants").select("*")
+        .eq("id", variant_id).eq("product_id", product.id)
+        .eq("active", true).single();
+      if (!v) return fail("Plano indisponivel.", 404);
+      variant = v;
+      amount = Math.max(1, v.price_cents - (v.discount_cents || 0));
+      itemName = `${product.name} — ${v.label}`;
+    }
+
+    // Reuse an open pending order (same user+product+method); repurpose to the
+    // chosen variant (o indice unico impede 2 pendentes do mesmo produto).
     const { data: open } = await c.from("orders").select("*")
       .eq("user_id", me.userId).eq("product_id", product.id)
       .eq("method", method).eq("status", "pending")
       .order("created_at", { ascending: false }).limit(1).maybeSingle();
 
     let order = open;
-    if (order && order.amount_cents !== product.price_cents) {
-      // Preco mudou depois que o pedido foi criado — atualiza.
-      await c.from("orders").update({ amount_cents: product.price_cents }).eq("id", order.id);
-      order.amount_cents = product.price_cents;
+    if (order && (order.amount_cents !== amount || order.variant_id !== (variant?.id || null))) {
+      await c.from("orders").update({
+        amount_cents: amount,
+        variant_id: variant?.id || null,
+        qr_code: null, qr_image: null, provider_id: null,  // nova cobranca pro novo valor
+      }).eq("id", order.id);
+      order.amount_cents = amount;
+      order.variant_id = variant?.id || null;
+      order.qr_code = null; order.qr_image = null; order.provider_id = null;
     }
     if (!order) {
       const { data, error } = await c.from("orders").insert({
         user_id: me.userId,
         product_id: product.id,
+        variant_id: variant?.id || null,
         method,
-        amount_cents: product.price_cents,
+        amount_cents: amount,
       }).select().single();
       if (error) return fail(error.message, 500);
       order = data;
@@ -56,7 +77,7 @@ Deno.serve(async (req) => {
         const charge = await createPixCharge({
           id: order.id,
           amount_cents: order.amount_cents,
-          description: `${product.name} - C4pt0r Store`,
+          description: `${itemName} - C4pt0r Store`,
         });
         const qrImg = charge.qrImage || (charge.qrCode ? await qrPng(charge.qrCode) : null);
         await c.from("orders").update({
@@ -70,7 +91,7 @@ Deno.serve(async (req) => {
         if (order.qr_image)
           await c.from("orders").update({ qr_image: order.qr_image }).eq("id", order.id);
       }
-      return json({ ok: true, order_id: order.id, qr_code: order.qr_code, qr_image: order.qr_image || null });
+      return json({ ok: true, order_id: order.id, qr_code: order.qr_code, qr_image: order.qr_image || null, amount_cents: order.amount_cents });
     }
 
     // ---- Card via Stripe Checkout -------------------------------------------
@@ -82,7 +103,7 @@ Deno.serve(async (req) => {
       "line_items[0][quantity]": "1",
       "line_items[0][price_data][currency]": "brl",
       "line_items[0][price_data][unit_amount]": String(order.amount_cents),
-      "line_items[0][price_data][product_data][name]": product.name,
+      "line_items[0][price_data][product_data][name]": itemName,
       "metadata[order_id]": order.id,
       "metadata[product_id]": product.id,
       "metadata[user_id]": me.userId,

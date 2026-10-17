@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { supabase, brl } from "@/lib/supabase";
 import AdminInsights from "@/components/AdminInsights";
+import VariantManager from "@/components/VariantManager";
 
 type Tab = "dash" | "events" | "orders" | "users" | "products";
 
@@ -25,6 +26,7 @@ export default function AdminPage() {
   const [orders, setOrders] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
+  const [variants, setVariants] = useState<any[]>([]);
   const [licenses, setLicenses] = useState<any[]>([]);
   const [evFilter, setEvFilter] = useState("");
   const [msg, setMsg] = useState("");
@@ -59,6 +61,7 @@ export default function AdminPage() {
           .order("created_at", { ascending: false })
           .limit(500),
         supabase.from("products").select("*").order("created_at"),
+        supabase.from("product_variants").select("*").order("sort"),
         supabase
           .from("licenses")
           .select("*, products(name)")
@@ -72,6 +75,7 @@ export default function AdminPage() {
         { data: ord },
         { data: usr },
         { data: prod },
+        { data: vars },
         { data: lic },
       ] = results;
       const profiles = new Map((usr || []).map((u) => [u.id, u]));
@@ -81,6 +85,7 @@ export default function AdminPage() {
       );
       setUsers(usr || []);
       setProducts(prod || []);
+      setVariants(vars || []);
       setLicenses(lic || []);
     } catch (e) {
       setError(
@@ -658,6 +663,16 @@ export default function AdminPage() {
                       }}
                     />
                   </div>
+                  <VariantManager
+                    productId={p.id}
+                    variants={variants}
+                    products={products}
+                    onChange={(m) => {
+                      setMsg(m);
+                      reload();
+                    }}
+                    onError={setError}
+                  />
                 </div>
                 <button
                   className="btn ghost"

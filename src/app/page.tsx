@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { supabase, Product, brl } from "@/lib/supabase";
+import { supabase, Product, brl, variantPrice, variantDuration } from "@/lib/supabase";
 import { track } from "@/lib/track";
 import { DISCORD_URL } from "@/lib/store";
 
@@ -19,7 +19,7 @@ export default function StorePage() {
     try {
       const { data, error } = await supabase
         .from("products")
-        .select("*")
+        .select("*, product_variants(*)")
         .eq("active", true)
         .order("price_cents");
       if (error) throw error;
@@ -206,7 +206,25 @@ export default function StorePage() {
           </div>
         ) : (
           <div className="product-grid">
-            {filtered.map((p, index) => (
+            {filtered.map((p, index) => {
+              const vs = (p.product_variants || [])
+                .filter((v) => v.active)
+                .sort((a, b) => a.sort - b.sort || a.price_cents - b.price_cents);
+              const cheapest = vs.length
+                ? vs.reduce((m, v) =>
+                    variantPrice(v) < variantPrice(m) ? v : m, vs[0])
+                : null;
+              const priceShow = cheapest
+                ? variantPrice(cheapest)
+                : p.price_cents;
+              const durLabel = cheapest
+                ? cheapest.duration_minutes == null
+                  ? "VITALÍCIO"
+                  : cheapest.label.toUpperCase()
+                : p.duration_days
+                  ? `${p.duration_days} DIAS`
+                  : "VITALÍCIO";
+              return (
               <article className="product-card" key={p.id}>
                 <div className={`product-art tone-${index % 3}`}>
                   <img
@@ -218,7 +236,7 @@ export default function StorePage() {
                   />
                   <span className="product-label">C4 / DIGITAL LICENSE</span>
                   <span className="duration-label">
-                    {p.duration_days ? `${p.duration_days} DIAS` : "VITALÍCIO"}
+                    {vs.length > 1 ? `${vs.length} PLANOS` : durLabel}
                   </span>
                 </div>
                 <div className="product-body">
@@ -250,12 +268,11 @@ export default function StorePage() {
                   <div className="product-price">
                     <div>
                       <small>
-                        LICENÇA{" "}
-                        {p.duration_days
-                          ? `DE ${p.duration_days} DIAS`
-                          : "VITALÍCIA"}
+                        {vs.length > 1
+                          ? `A PARTIR DE — ${durLabel}`
+                          : `LICENÇA ${durLabel}`}
                       </small>
-                      <strong>{brl(p.price_cents)}</strong>
+                      <strong>{brl(priceShow)}</strong>
                     </div>
                     <span>Pagamento único</span>
                   </div>
@@ -274,7 +291,8 @@ export default function StorePage() {
                   </a>
                 </div>
               </article>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>

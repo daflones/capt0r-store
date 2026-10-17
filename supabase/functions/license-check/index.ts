@@ -17,7 +17,7 @@ Deno.serve(async (req) => {
     // Load licenses joined with products
     const { data: lics } = await c
       .from("licenses")
-      .select("id, status, expires_at, activated_at, hwid, product_id, products(slug, name, dll_path, pkg_path)")
+      .select("id, status, expires_at, activated_at, hwid, product_id, variant_label, products(slug, name, dll_path, pkg_path)")
       .eq("user_id", me.userId);
 
     const list = (lics || []).map((l: any) => {
@@ -31,6 +31,7 @@ Deno.serve(async (req) => {
         status: expired ? "expired" : l.status,
         expires_at: l.expires_at,
         activated_at: l.activated_at,
+        variant_label: l.variant_label || "",
       };
     });
 

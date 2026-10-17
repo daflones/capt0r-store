@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { supabase, Product, brl } from '@/lib/supabase';
+import { supabase, Product, Variant, brl, variantPrice, variantDuration } from '@/lib/supabase';
 import { track } from '@/lib/track';
 
 type PixData = { order_id: string; qr_code: string; qr_image: string | null };
@@ -11,20 +11,34 @@ export default function CheckoutPage() {
   const { slug } = useParams<{ slug: string }>();
   const router = useRouter();
   const [product, setProduct] = useState<Product | null>(null);
+  const [variant, setVariant] = useState<Variant | null>(null);
   const [method, setMethod] = useState<'pix' | 'card'>('pix');
   const [pix, setPix] = useState<PixData | null>(null);
   const [status, setStatus] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
 
+  const variants = (product?.product_variants || [])
+    .filter((v) => v.active)
+    .sort((a, b) => a.sort - b.sort || a.price_cents - b.price_cents);
+
   useEffect(() => {
     (async () => {
       const { data: sess } = await supabase.auth.getSession();
       if (!sess.session) return router.push(`/login?next=/checkout/${slug}`);
-      const { data } = await supabase.from('products').select('*').eq('slug', slug).single();
+      const { data } = await supabase
+        .from('products')
+        .select('*, product_variants(*)')
+        .eq('slug', slug)
+        .single();
       if (data) {
-        setProduct(data as Product);
-        track('checkout_started', { product_id: data.id });
+        const p = data as Product;
+        setProduct(p);
+        const act = (p.product_variants || [])
+          .filter((v) => v.active)
+          .sort((a, b) => a.sort - b.sort || a.price_cents - b.price_cents);
+        if (act.length) setVariant(act[0]);
+        track('checkout_started', { product_id: p.id });
       }
     })();
   }, [slug, router]);
@@ -51,9 +65,13 @@ export default function CheckoutPage() {
   async function pay() {
     setBusy(true);
     setErr('');
-    track('payment_started', { product_id: product?.id, meta: { method } });
+    track('payment_started', { product_id: product?.id, meta: { method, variant: variant?.id } });
     try {
-      const r = await callFn('checkout', { product_slug: slug, method });
+      const r = await callFn('checkout', {
+        product_slug: slug,
+        method,
+        variant_id: variant?.id || null,
+      });
       if (method === 'card' && r.checkout_url) {
         window.location.href = r.checkout_url;
         return;
@@ -90,16 +108,57 @@ export default function CheckoutPage() {
 
   if (!product) return <div className="spin">Carregando...</div>;
 
+  const finalPrice = variant ? variantPrice(variant) : product.price_cents;
+  const planName = variant ? `${product.name} — ${variant.label}` : product.name;
+  const planDur = variant
+    ? variantDuration(variant)
+    : product.duration_days
+      ? `${product.duration_days} dias`
+      : 'vitalício';
+
   return (
     <div className="panel" style={{ maxWidth: 520 }}>
       <h1>Checkout</h1>
       <p className="sub">
-        {product.name} — <b style={{ color: 'var(--gold)' }}>{brl(product.price_cents)}</b>
-        {product.duration_days ? ` (${product.duration_days} dias)` : ' (vitalício)'}
+        {planName} — <b style={{ color: 'var(--gold)' }}>{brl(finalPrice)}</b>
+        {` (${planDur})`}
       </p>
 
       {err && <div className="msg err">{err}</div>}
       {status && <div className="msg info">{status}</div>}
+
+      {!pix && variants.length > 0 && (
+        <div className="variant-list">
+          {variants.map((v) => {
+            const sel = variant?.id === v.id;
+            const finalV = variantPrice(v);
+            return (
+              <button
+                key={v.id}
+                type="button"
+                className={`variant-card ${sel ? 'sel' : ''}`}
+                onClick={() => setVariant(v)}
+              >
+                <span className="variant-radio" aria-hidden="true">
+                  {sel ? '◉' : '○'}
+                </span>
+                <span className="variant-info">
+                  <b>{v.label}</b>
+                  {v.bonus_label && (
+                    <em className="variant-bonus">🎁 {v.bonus_label}</em>
+                  )}
+                </span>
+                <span className="variant-price">
+                  {v.discount_cents > 0 && (
+                    <s>{brl(v.price_cents)}</s>
+                  )}
+                  <b>{brl(finalV)}</b>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {!pix ? (
         <>
@@ -112,7 +171,7 @@ export default function CheckoutPage() {
             </button>
           </div>
           <button className="btn" onClick={pay} disabled={busy}>
-            {busy ? 'GERANDO...' : method === 'pix' ? 'GERAR QR CODE PIX' : 'PAGAR COM CARTÃO'}
+            {busy ? 'GERANDO...' : method === 'pix' ? `GERAR QR — ${brl(finalPrice)}` : `PAGAR — ${brl(finalPrice)}`}
           </button>
         </>
       ) : (
